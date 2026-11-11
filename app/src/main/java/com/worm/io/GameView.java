@@ -4,7 +4,6 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
@@ -62,6 +61,7 @@ public class GameView extends View {
 
     static final float WORLD = 6000f;
     static final int FOOD_COUNT = 800;
+    static final int MAX_FOOD_CAP = 1200;
     static final float SEG = 4f;
     static final float START_LEN = 120f;
     static final float BASE_HEAD_R = 10f;
@@ -89,13 +89,14 @@ public class GameView extends View {
 
     // Buffer Native C++
     private final float[] nativeState = new float[6];
-    private final float[] trailBuffer = new float[10000];
-    private final float[] foodBuffer = new float[FOOD_COUNT * 3];
-    private final int[] foodColors = new int[FOOD_COUNT];
+    private final float[] trailBuffer = new float[12000];
+    private final float[] foodBuffer = new float[MAX_FOOD_CAP * 3];
+    private final int[] foodColors = new int[MAX_FOOD_CAP];
     private final float[] botInfoBuffer = new float[10 * 6];
     private final float[] botTrailsBuffer = new float[10 * 600 * 2];
     private final int[] botTrailOffsets = new int[10 * 2];
     private int trailPointsCount = 0;
+    private int currentFoodCount = 0;
 
     private boolean singlePlayer = false;
     private String roomCode = null;
@@ -224,10 +225,9 @@ public class GameView extends View {
         }
 
         trailPointsCount = GameEngine.nativeGetTrail(trailBuffer);
-        GameEngine.nativeGetFoodData(foodBuffer, foodColors);
+        currentFoodCount = GameEngine.nativeGetFoodData(foodBuffer, foodColors);
 
         if (singlePlayer) {
-            // Ambil data Bot dari C++ untuk dirender
             int botCount = GameEngine.nativeGetBotsData(botInfoBuffer, botTrailsBuffer, botTrailOffsets);
             renderRemotes.clear();
             for (int i = 0; i < botCount; i++) {
@@ -247,11 +247,10 @@ public class GameView extends View {
                         bhx, bhy, bangle, false, blen, bpts, count));
             }
         } else {
-            // Multiplayer: Interpolasi cacing lawan
             updateSmoothRemotes();
         }
 
-        // Cek tabrakan dengan musuh/bot
+        // Cek tabrakan dengan lawan/bot
         for (Remote r : renderRemotes) {
             float enemyRadius = calcBodyRadius(r.len);
             float killDist = myRadius * 0.7f + enemyRadius * 0.7f;
@@ -265,7 +264,7 @@ public class GameView extends View {
             }
         }
 
-        // Snapshot untuk sinkronisasi multiplayer
+        // Snapshot Multiplayer
         float[] s = new float[5 + 2 * SYNC_MAX];
         s[0] = hx;
         s[1] = hy;
@@ -427,21 +426,21 @@ public class GameView extends View {
         paint.setColor(0xFFFF3B30);
         c.drawRect(0, 0, WORLD, WORLD, paint);
 
-        // Makanan
+        // Render Makanan
         paint.setStyle(Paint.Style.FILL);
-        for (int i = 0; i < FOOD_COUNT; i++) {
+        for (int i = 0; i < currentFoodCount; i++) {
             paint.setColor(foodColors[i]);
             c.drawCircle(foodBuffer[3 * i], foodBuffer[3 * i + 1], foodBuffer[3 * i + 2], paint);
         }
 
-        // Cacing Musuh & Bot
+        // Render Cacing Musuh & Bot
         for (Remote r : renderRemotes) {
             if (r.n < 1) continue;
             float enemyRadius = calcBodyRadius(r.len);
             drawSnake(c, r.pts, r.n, r.color, r.name, r.angle, enemyRadius);
         }
 
-        // Cacing Pemain Utama
+        // Render Cacing Pemain Utama
         if (alive && trailPointsCount > 0) {
             drawSnake(c, trailBuffer, trailPointsCount, myColor, myName, angle, myRadius);
         }
@@ -451,65 +450,98 @@ public class GameView extends View {
         drawControls(c);
     }
 
-    /** Menggambar cacing bersih tanpa efek bling yang berkedip */
+    // Menggambar segmen dari ekor ke kepala agar tumpukan cacing memiliki garis pemisah 3D
     private void drawSnake(Canvas c, float[] p, int n, int color, String name, float knownAngle, float r) {
-        Path path = new Path();
-        if (n < 2) {
-            path.moveTo(p[0], p[1]);
-        } else {
-            path.moveTo(p[0], p[1]);
-            for (int i = 1; i < n - 1; i++) {
-                float mx = (p[2 * i] + p[2 * (i + 1)]) / 2f;
-                float my = (p[2 * i + 1] + p[2 * (i + 1) + 1]) / 2f;
-                path.quadTo(p[2 * i], p[2 * i + 1], mx, my);
-            }
-            path.lineTo(p[2 * (n - 1)], p[2 * (n - 1) + 1]);
+        if (n < 1) return;
+
+        int darkBorder = darkenColor(color, 0.48f);
+        int lightTint = lightenColor(color, 1.20f);
+
+        int step = Math.max(1, Math.round(r * 0.40f / SEG));
+
+        // 1. Gambar badan dari EKOR ke KEPALA
+        paint.setStyle(Paint.Style.FILL);
+        for (int i = n - 1; i >= 1; i -= step) {
+            float x = p[2 * i];
+            float y = p[2 * i + 1];
+
+            // Lingkaran luar (garis tepi pemisah tumpukan)
+            paint.setColor(darkBorder);
+            c.drawCircle(x, y, r, paint);
+
+            // Lingkaran isi badan dengan pola belang/sisik
+            paint.setColor(((i / step) % 2 == 0) ? color : lightTint);
+            c.drawCircle(x, y, r - 2.2f, paint);
         }
 
-        // Badan cacing solid dan bersih
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setStrokeJoin(Paint.Join.ROUND);
-        paint.setStrokeWidth(r * 2f);
+        // 2. Gambar Kepala
+        float headX = p[0];
+        float headY = p[1];
+
+        paint.setColor(darkBorder);
+        c.drawCircle(headX, headY, r, paint);
+
         paint.setColor(color);
-        c.drawPath(path, paint);
+        c.drawCircle(headX, headY, r - 2.2f, paint);
 
-        // Kepala bulat
-        paint.setStyle(Paint.Style.FILL);
-        c.drawCircle(p[0], p[1], r, paint);
-
-        // Arah mata
+        // 3. Gambar Mata
         float dx = (float) Math.cos(knownAngle);
         float dy = (float) Math.sin(knownAngle);
 
-        float eyeSpacing = r * 0.54f;
-        float eyeForward = r * 0.38f;
+        float eyeSpacing = r * 0.52f;
+        float eyeForward = r * 0.36f;
         float px = -dy * eyeSpacing, py = dx * eyeSpacing;
         float ex = dx * eyeForward, ey = dy * eyeForward;
 
-        float leftEyeX = p[0] + ex + px;
-        float leftEyeY = p[1] + ey + py;
-        float rightEyeX = p[0] + ex - px;
-        float rightEyeY = p[1] + ey - py;
+        float leftEyeX = headX + ex + px;
+        float leftEyeY = headY + ey + py;
+        float rightEyeX = headX + ex - px;
+        float rightEyeY = headY + ey - py;
 
-        float eyeRadius = r * 0.42f;
-        float pupilRadius = eyeRadius * 0.52f;
+        float eyeRadius = r * 0.40f;
+        float pupilRadius = eyeRadius * 0.50f;
 
-        // Bagian putih mata
+        paint.setColor(0xFF222222);
+        c.drawCircle(leftEyeX, leftEyeY, eyeRadius + 0.8f, paint);
+        c.drawCircle(rightEyeX, rightEyeY, eyeRadius + 0.8f, paint);
+
         paint.setColor(Color.WHITE);
         c.drawCircle(leftEyeX, leftEyeY, eyeRadius, paint);
         c.drawCircle(rightEyeX, rightEyeY, eyeRadius, paint);
 
-        // Pupil hitam
         paint.setColor(Color.BLACK);
-        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.32f), leftEyeY + dy * (eyeRadius * 0.32f), pupilRadius, paint);
-        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.32f), rightEyeY + dy * (eyeRadius * 0.32f), pupilRadius, paint);
+        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.30f), leftEyeY + dy * (eyeRadius * 0.30f), pupilRadius, paint);
+        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.30f), rightEyeY + dy * (eyeRadius * 0.30f), pupilRadius, paint);
 
-        // Nama di atas cacing
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(Math.max(22f, r * 1.6f));
         paint.setColor(Color.WHITE);
-        c.drawText(name, p[0], p[1] - r - 10f, paint);
+        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.30f) - 0.8f, leftEyeY + dy * (eyeRadius * 0.30f) - 0.8f, pupilRadius * 0.35f, paint);
+        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.30f) - 0.8f, rightEyeY + dy * (eyeRadius * 0.30f) - 0.8f, pupilRadius * 0.35f, paint);
+
+        // 4. Nama Pemain
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTextSize(Math.max(22f, r * 1.5f));
+        paint.setColor(Color.WHITE);
+        c.drawText(name, headX, headY - r - 10f, paint);
+    }
+
+    private static int darkenColor(int color, float factor) {
+        int a = Color.alpha(color);
+        int r = Math.round(Color.red(color) * factor);
+        int g = Math.round(Color.green(color) * factor);
+        int b = Math.round(Color.blue(color) * factor);
+        return Color.argb(a, Math.max(0, Math.min(255, r)),
+                Math.max(0, Math.min(255, g)),
+                Math.max(0, Math.min(255, b)));
+    }
+
+    private static int lightenColor(int color, float factor) {
+        int a = Color.alpha(color);
+        int r = Math.round(Color.red(color) * factor);
+        int g = Math.round(Color.green(color) * factor);
+        int b = Math.round(Color.blue(color) * factor);
+        return Color.argb(a, Math.max(0, Math.min(255, r)),
+                Math.max(0, Math.min(255, g)),
+                Math.max(0, Math.min(255, b)));
     }
 
     private void drawHud(Canvas c) {

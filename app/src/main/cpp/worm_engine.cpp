@@ -39,6 +39,14 @@ static std::vector<Pellet> gFoods;
 static std::vector<BotCacing> gBots;
 static std::mt19937 rng(1337);
 
+// Static reusable buffers (Menghilangkan lag memori / GC)
+static std::vector<jfloat> sTrailBuf;
+static std::vector<jfloat> sFoodBuf;
+static std::vector<jint> sColorBuf;
+static std::vector<jfloat> sBotInfoBuf;
+static std::vector<jint> sBotOffsetBuf;
+static std::vector<jfloat> sBotTrailBuf;
+
 static const int FOOD_COLORS[] = {
     (int)0xFFFF5252, (int)0xFFFFD740, (int)0xFF69F0AE, 
     (int)0xFF40C4FF, (int)0xFFE040FB, (int)0xFFFFAB40
@@ -141,7 +149,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                                         jboolean isBoosting, jfloatArray outState) {
     if (!pAlive) return;
 
-    // 1. Update Pemain Lokal (Momentum belok)
     if (joyActive) {
         float target = std::atan2(joyDy, joyDx);
         float diff = wrapAngle(target - pAngle);
@@ -192,7 +199,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // 2. Update AI Bot (Gerak, Makan, & Tabrakan)
+    // AI Bot Update
     for (auto& b : gBots) {
         b.timer--;
         if (b.timer <= 0) {
@@ -201,7 +208,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
             b.timer = 25 + (rng() % 45);
         }
 
-        // Hindari tepi dinding arena
         float margin = 320.0f;
         if (b.hx < margin) b.targetAngle = 0.0f;
         else if (b.hx > gWorld - margin) b.targetAngle = (float)M_PI;
@@ -252,28 +258,44 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
             }
         }
 
-        // Cek jika kepala bot menabrak badan pemain
+        // Cek jika bot menabrak badan pemain (Player membunuh Bot)
         if (pAlive) {
             float killDist = botRadius * 0.7f + currentRadius * 0.7f;
             for (const auto& pt : pTrail) {
                 float dx = pt.x - b.hx;
                 float dy = pt.y - b.hy;
                 if (dx * dx + dy * dy < killDist * killDist) {
-                    // Bot mati -> isi makanan & respawn
+                    // Bot mati: Jatuhkan makanan (dibatasi maksimal 1200 agar tidak buffer overflow / crash)
                     for (size_t k = 0; k < b.trail.size(); k += 4) {
                         Pellet p;
                         p.x = b.trail[k].x;
                         p.y = b.trail[k].y;
-                        p.r = 10.0f;
+                        p.r = 9.5f;
                         p.val = 8.0f;
                         p.c = b.color;
-                        gFoods.push_back(p);
+                        if (gFoods.size() < 1200) {
+                            gFoods.push_back(p);
+                        } else {
+                            gFoods[rng() % gFoods.size()] = p;
+                        }
                     }
+
+                    // Respawn Bot
                     std::uniform_real_distribution<float> distSpawn(gWorld * 0.2f, gWorld * 0.8f);
+                    std::uniform_real_distribution<float> distAngle(0.0f, 2.0f * M_PI);
                     b.hx = distSpawn(rng);
                     b.hy = distSpawn(rng);
+                    b.angle = distAngle(rng);
+                    b.targetAngle = b.angle;
                     b.len = gStartLen + 20.0f;
                     b.trail.clear();
+                    int bn = (int)(b.len / gSeg);
+                    for (int j = 0; j <= bn; j++) {
+                        b.trail.push_back({
+                            b.hx - std::cos(b.angle) * gSeg * j,
+                            b.hy - std::sin(b.angle) * gSeg * j
+                        });
+                    }
                     break;
                 }
             }
@@ -291,38 +313,50 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
     env->SetFloatArrayRegion(outState, 0, 6, temp);
 }
 
+// Mengunci koordinat kepala di titik 0 agar gerakan mulus tanpa tersendat
 JNIEXPORT jint JNICALL
 Java_com_worm_io_GameEngine_nativeGetTrail(JNIEnv* env, jclass clazz, jfloatArray outPts) {
-    int count = pTrail.size();
-    if (count == 0) return 0;
+    jsize maxPts = env->GetArrayLength(outPts);
+    int totalPts = (int)pTrail.size() + 1;
+    int nFloats = std::min(totalPts * 2, (int)maxPts);
+    if (nFloats < 2) return 0;
 
-    std::vector<jfloat> buf(count * 2);
-    for (int i = 0; i < count; i++) {
-        buf[2 * i] = pTrail[i].x;
-        buf[2 * i + 1] = pTrail[i].y;
+    sTrailBuf.resize(nFloats);
+    sTrailBuf[0] = pX;
+    sTrailBuf[1] = pY;
+
+    for (size_t i = 0; i < pTrail.size() && (2 * i + 3) < (size_t)nFloats; i++) {
+        sTrailBuf[2 * (i + 1)] = pTrail[i].x;
+        sTrailBuf[2 * (i + 1) + 1] = pTrail[i].y;
     }
-    env->SetFloatArrayRegion(outPts, 0, count * 2, buf.data());
-    return count;
+
+    env->SetFloatArrayRegion(outPts, 0, nFloats, sTrailBuf.data());
+    return nFloats / 2;
 }
 
-JNIEXPORT void JNICALL
+// Menjamin jumlah makanan yang disalin tidak melampaui batas array Java
+JNIEXPORT jint JNICALL
 Java_com_worm_io_GameEngine_nativeGetFoodData(JNIEnv* env, jclass clazz, jfloatArray outFoods, jintArray outColors) {
-    int n = gFoods.size();
-    std::vector<jfloat> fBuf(n * 3);
-    std::vector<jint> cBuf(n);
+    jsize maxColors = env->GetArrayLength(outColors);
+    jsize maxFloats = env->GetArrayLength(outFoods);
+    int n = std::min((int)gFoods.size(), (int)maxColors);
+    n = std::min(n, (int)(maxFloats / 3));
+
+    sFoodBuf.resize(n * 3);
+    sColorBuf.resize(n);
 
     for (int i = 0; i < n; i++) {
-        fBuf[3 * i] = gFoods[i].x;
-        fBuf[3 * i + 1] = gFoods[i].y;
-        fBuf[3 * i + 2] = gFoods[i].r;
-        cBuf[i] = gFoods[i].c;
+        sFoodBuf[3 * i] = gFoods[i].x;
+        sFoodBuf[3 * i + 1] = gFoods[i].y;
+        sFoodBuf[3 * i + 2] = gFoods[i].r;
+        sColorBuf[i] = gFoods[i].c;
     }
 
-    env->SetFloatArrayRegion(outFoods, 0, n * 3, fBuf.data());
-    env->SetIntArrayRegion(outColors, 0, n, cBuf.data());
+    env->SetFloatArrayRegion(outFoods, 0, n * 3, sFoodBuf.data());
+    env->SetIntArrayRegion(outColors, 0, n, sColorBuf.data());
+    return n;
 }
 
-/** Mengirim data bot ke Java untuk digambar */
 JNIEXPORT jint JNICALL
 Java_com_worm_io_GameEngine_nativeGetBotsData(JNIEnv* env, jclass clazz,
                                               jfloatArray outBotInfo,
@@ -331,36 +365,54 @@ Java_com_worm_io_GameEngine_nativeGetBotsData(JNIEnv* env, jclass clazz,
     int count = gBots.size();
     if (count == 0) return 0;
 
-    std::vector<jfloat> infoBuf(count * 6);
-    std::vector<jint> offsetBuf(count * 2);
-    std::vector<jfloat> trailBuf;
+    jsize maxInfo = env->GetArrayLength(outBotInfo);
+    jsize maxOffsets = env->GetArrayLength(outTrailOffsets);
+    jsize maxTrails = env->GetArrayLength(outTrails);
+
+    int safeCount = std::min(count, (int)(maxInfo / 6));
+    safeCount = std::min(safeCount, (int)(maxOffsets / 2));
+
+    sBotInfoBuf.resize(safeCount * 6);
+    sBotOffsetBuf.resize(safeCount * 2);
+    sBotTrailBuf.clear();
 
     int currentOffset = 0;
-    for (int i = 0; i < count; i++) {
-        infoBuf[i * 6] = gBots[i].hx;
-        infoBuf[i * 6 + 1] = gBots[i].hy;
-        infoBuf[i * 6 + 2] = gBots[i].angle;
-        infoBuf[i * 6 + 3] = gBots[i].len;
-        infoBuf[i * 6 + 4] = calcRadius(gBots[i].len);
-        infoBuf[i * 6 + 5] = (float)gBots[i].color;
+    for (int i = 0; i < safeCount; i++) {
+        sBotInfoBuf[i * 6] = gBots[i].hx;
+        sBotInfoBuf[i * 6 + 1] = gBots[i].hy;
+        sBotInfoBuf[i * 6 + 2] = gBots[i].angle;
+        sBotInfoBuf[i * 6 + 3] = gBots[i].len;
+        sBotInfoBuf[i * 6 + 4] = calcRadius(gBots[i].len);
+        sBotInfoBuf[i * 6 + 5] = (float)gBots[i].color;
 
-        int tCount = gBots[i].trail.size();
-        offsetBuf[i * 2] = currentOffset;
-        offsetBuf[i * 2 + 1] = tCount;
-
-        for (int j = 0; j < tCount; j++) {
-            trailBuf.push_back(gBots[i].trail[j].x);
-            trailBuf.push_back(gBots[i].trail[j].y);
+        // Kepala bot di posisi pertama
+        if (currentOffset + 2 <= maxTrails) {
+            sBotTrailBuf.push_back(gBots[i].hx);
+            sBotTrailBuf.push_back(gBots[i].hy);
         }
+
+        int tCount = 1;
+        for (size_t j = 0; j < gBots[i].trail.size(); j++) {
+            if (currentOffset + (tCount + 1) * 2 <= maxTrails) {
+                sBotTrailBuf.push_back(gBots[i].trail[j].x);
+                sBotTrailBuf.push_back(gBots[i].trail[j].y);
+                tCount++;
+            } else {
+                break;
+            }
+        }
+
+        sBotOffsetBuf[i * 2] = currentOffset;
+        sBotOffsetBuf[i * 2 + 1] = tCount;
         currentOffset += tCount * 2;
     }
 
-    env->SetFloatArrayRegion(outBotInfo, 0, count * 6, infoBuf.data());
-    env->SetIntArrayRegion(outTrailOffsets, 0, count * 2, offsetBuf.data());
-    if (!trailBuf.empty()) {
-        env->SetFloatArrayRegion(outTrails, 0, trailBuf.size(), trailBuf.data());
+    env->SetFloatArrayRegion(outBotInfo, 0, safeCount * 6, sBotInfoBuf.data());
+    env->SetIntArrayRegion(outTrailOffsets, 0, safeCount * 2, sBotOffsetBuf.data());
+    if (!sBotTrailBuf.empty()) {
+        env->SetFloatArrayRegion(outTrails, 0, sBotTrailBuf.size(), sBotTrailBuf.data());
     }
-    return count;
+    return safeCount;
 }
 
 } // extern "C"
