@@ -2,84 +2,40 @@ plugins {
     id 'com.android.application'
 }
 
-def gdxVersion = '1.13.1'
-
-configurations {
-    natives
-}
-
 android {
-    namespace "org.carft.block"
-    compileSdk 35
+    namespace 'com.worm.io'
+    compileSdk 37
 
     defaultConfig {
-        applicationId "org.carft.block"
-        minSdk 26
-        targetSdk 35
+        applicationId 'com.worm.io'
+        minSdk 21
+        targetSdk 34
         versionCode 1
-        versionName "1.0"
-    }
+        versionName '1.0'
 
-    signingConfigs {
-        aurora {
-            storeFile rootProject.file('key-store-aurora.jks')
-            storePassword 'aurora23'
-            keyAlias 'Aurora'
-            keyPassword 'aurora23'
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17 -O3 -fexceptions'
+            }
+        }
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
         }
     }
 
-    buildTypes {
-        debug {
-            signingConfig signingConfigs.aurora
-        }
-        release {
-            signingConfig signingConfigs.aurora
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
         }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
-
-    sourceSets {
-        main {
-            jniLibs.srcDir layout.buildDirectory.dir('gdx-natives')
-        }
-    }
-}
-
-tasks.register('copyAndroidNatives', Sync) {
-    into layout.buildDirectory.dir('gdx-natives')
-    ['armeabi-v7a', 'arm64-v8a'].each { abi ->
-        into(abi) {
-            from {
-                configurations.natives.filter {
-                    it.name.endsWith("natives-${abi}.jar")
-                }.collect {
-                    zipTree(it)
-                }
-            }
-            include '*.so'
-        }
-    }
-}
-
-tasks.matching { it.name ==~ /merge.*JniLibFolders/ }.configureEach {
-    dependsOn 'copyAndroidNatives'
 }
 
 dependencies {
-    implementation "com.badlogicgames.gdx:gdx:$gdxVersion"
-    implementation "com.badlogicgames.gdx:gdx-backend-android:$gdxVersion"
-
-    natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi-v7a"
-    natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-arm64-v8a"
-    
-    implementation "com.badlogicgames.gdx:gdx-bullet:$gdxVersion"
-    natives "com.badlogicgames.gdx:gdx-bullet-platform:$gdxVersion:natives-armeabi-v7a"
-    natives "com.badlogicgames.gdx:gdx-bullet-platform:$gdxVersion:natives-arm64-v8a"
+    // Tetap 0 library / tanpa androidx
 }

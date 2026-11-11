@@ -1,0 +1,6 @@
+{
+  "rules": {
+    "uno_rooms": { ".read": true, ".write": true },
+    "cacing_rooms": { ".read": true, ".write": true }
+  }
+}
