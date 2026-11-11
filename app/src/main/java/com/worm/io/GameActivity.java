@@ -21,7 +21,7 @@ public class GameActivity extends Activity {
     public static final String EXTRA_CODE = "code";
     public static final String EXTRA_NAME = "name";
     public static final String EXTRA_ID = "id";
-    private static final long SYNC_DELAY_MS = 60;
+    private static final long SYNC_DELAY_MS = 150;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private GameView view;

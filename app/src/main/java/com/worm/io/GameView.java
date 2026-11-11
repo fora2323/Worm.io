@@ -36,16 +36,10 @@ public class GameView extends View {
 
         public Remote(String id, String name, int color, float hx, float hy,
                       float angle, boolean boosting, float len, float[] pts, int n) {
-            this.id = id;
-            this.name = name;
-            this.color = color;
-            this.hx = hx;
-            this.hy = hy;
-            this.angle = angle;
-            this.boosting = boosting;
-            this.len = len;
-            this.pts = pts;
-            this.n = n;
+            this.id = id; this.name = name; this.color = color;
+            this.hx = hx; this.hy = hy; this.angle = angle;
+            this.boosting = boosting; this.len = len;
+            this.pts = pts; this.n = n;
         }
     }
 
@@ -56,6 +50,7 @@ public class GameView extends View {
         float angle, targetAngle;
         float len;
         boolean boosting;
+        long lastServerUpdate = 0;
         final ArrayList<float[]> trail = new ArrayList<>();
     }
 
@@ -87,7 +82,6 @@ public class GameView extends View {
     private volatile float[] snapshot = new float[5];
     private volatile boolean alive = true;
 
-    // Buffer Native C++
     private final float[] nativeState = new float[6];
     private final float[] trailBuffer = new float[12000];
     private final float[] foodBuffer = new float[MAX_FOOD_CAP * 3];
@@ -118,8 +112,7 @@ public class GameView extends View {
     private static final float BOOST_RADIUS = 80f;
 
     private final Runnable tick = new Runnable() {
-        @Override
-        public void run() {
+        @Override public void run() {
             if (!running) return;
             update();
             invalidate();
@@ -132,75 +125,38 @@ public class GameView extends View {
         GameEngine.nativeInitWorld(WORLD, FOOD_COUNT);
     }
 
-    public void setPlayer(String name, int color) {
-        myName = name;
-        myColor = color;
-    }
+    public void setPlayer(String name, int color) { myName = name; myColor = color; }
 
     public void setMode(boolean single, String code) {
         this.singlePlayer = single;
         this.roomCode = code;
         smoothRemotes.clear();
         renderRemotes.clear();
-        if (single) {
-            GameEngine.nativeInitBots(8);
-        } else {
-            GameEngine.nativeInitBots(0);
-        }
+        GameEngine.nativeInitBots(single ? 8 : 0);
     }
 
-    public void setListener(Listener l) {
-        listener = l;
-    }
+    public void setListener(Listener l) { listener = l; }
+    public void setRemotes(List<Remote> r) { incomingRemotes = r; }
+    public boolean isAlive() { return alive; }
+    public float[] snapshot() { return snapshot; }
 
-    public void setRemotes(List<Remote> r) {
-        incomingRemotes = r;
-    }
-
-    public boolean isAlive() {
-        return alive;
-    }
-
-    public float[] snapshot() {
-        return snapshot;
-    }
-
-    public void start() {
-        running = true;
-        spawn();
-        handler.post(tick);
-    }
-
-    public void stop() {
-        running = false;
-        handler.removeCallbacks(tick);
-    }
-
-    public void respawn() {
-        spawn();
-    }
+    public void start() { running = true; spawn(); handler.post(tick); }
+    public void stop() { running = false; handler.removeCallbacks(tick); }
+    public void respawn() { spawn(); }
 
     private void spawn() {
         GameEngine.nativeInitWorld(WORLD, FOOD_COUNT);
-        if (singlePlayer) {
-            GameEngine.nativeInitBots(8);
-        }
-        joyPointerId = -1;
-        boostPointerId = -1;
-        isBoosting = false;
-        alive = true;
+        if (singlePlayer) GameEngine.nativeInitBots(8);
+        joyPointerId = -1; boostPointerId = -1; isBoosting = false; alive = true;
+        smoothRemotes.clear(); renderRemotes.clear();
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        joyCenterX = 170f;
-        joyCenterY = h - 150f;
-        joyKnobX = joyCenterX;
-        joyKnobY = joyCenterY;
-
-        boostCenterX = w - 170f;
-        boostCenterY = h - 150f;
+        joyCenterX = 170f; joyCenterY = h - 150f;
+        joyKnobX = joyCenterX; joyKnobY = joyCenterY;
+        boostCenterX = w - 170f; boostCenterY = h - 150f;
     }
 
     private void update() {
@@ -211,18 +167,11 @@ public class GameView extends View {
         boolean joyActive = (joyPointerId != -1) && (jdx * jdx + jdy * jdy > 25f);
 
         GameEngine.nativeUpdate(jdx, jdy, joyActive, isBoosting, nativeState);
+        hx = nativeState[0]; hy = nativeState[1];
+        angle = nativeState[2]; len = nativeState[3];
+        myRadius = nativeState[4]; alive = nativeState[5] == 1.0f;
 
-        hx = nativeState[0];
-        hy = nativeState[1];
-        angle = nativeState[2];
-        len = nativeState[3];
-        myRadius = nativeState[4];
-        alive = nativeState[5] == 1.0f;
-
-        if (!alive) {
-            if (listener != null) listener.onDied(len);
-            return;
-        }
+        if (!alive) { if (listener != null) listener.onDied(len); return; }
 
         trailPointsCount = GameEngine.nativeGetTrail(trailBuffer);
         currentFoodCount = GameEngine.nativeGetFoodData(foodBuffer, foodColors);
@@ -236,21 +185,18 @@ public class GameView extends View {
                 float bangle = botInfoBuffer[i * 6 + 2];
                 float blen = botInfoBuffer[i * 6 + 3];
                 int bcolor = (int) botInfoBuffer[i * 6 + 5];
-
                 int offset = botTrailOffsets[i * 2];
                 int count = botTrailOffsets[i * 2 + 1];
-
                 float[] bpts = new float[count * 2];
                 System.arraycopy(botTrailsBuffer, offset, bpts, 0, count * 2);
-
-                renderRemotes.add(new Remote("bot_" + i, BOT_NAMES[i % BOT_NAMES.length], bcolor,
-                        bhx, bhy, bangle, false, blen, bpts, count));
+                renderRemotes.add(new Remote("bot_" + i,
+                    BOT_NAMES[i % BOT_NAMES.length], bcolor,
+                    bhx, bhy, bangle, false, blen, bpts, count));
             }
         } else {
             updateSmoothRemotes();
         }
 
-        // Cek tabrakan dengan lawan/bot
         for (Remote r : renderRemotes) {
             float enemyRadius = calcBodyRadius(r.len);
             float killDist = myRadius * 0.7f + enemyRadius * 0.7f;
@@ -264,15 +210,9 @@ public class GameView extends View {
             }
         }
 
-        // Snapshot Multiplayer
         float[] s = new float[5 + 2 * SYNC_MAX];
-        s[0] = hx;
-        s[1] = hy;
-        s[2] = len;
-        s[3] = angle;
-        s[4] = isBoosting ? 1f : 0f;
-        s[5] = hx;
-        s[6] = hy;
+        s[0] = hx; s[1] = hy; s[2] = len; s[3] = angle; s[4] = isBoosting ? 1f : 0f;
+        s[5] = hx; s[6] = hy;
         int cnt = 1;
         for (int i = SYNC_STEP; i < trailPointsCount && cnt < SYNC_MAX; i += SYNC_STEP) {
             s[5 + 2 * cnt] = trailBuffer[2 * i];
@@ -290,31 +230,31 @@ public class GameView extends View {
             for (Remote r : latest) {
                 activeIds.add(r.id);
                 SmoothRemote sr = smoothRemotes.get(r.id);
-                float distJump = sr == null ? 9999f : (float) Math.hypot(r.hx - sr.hx, r.hy - sr.hy);
+                float distJump = sr == null ? 9999f
+                    : (float) Math.hypot(r.hx - sr.tx, r.hy - sr.ty);
 
                 if (sr == null || distJump > 600f) {
+                    // Pemain baru atau teleport — reset total
                     sr = new SmoothRemote();
-                    sr.id = r.id;
-                    sr.name = r.name;
-                    sr.color = r.color;
-                    sr.hx = r.hx;
-                    sr.hy = r.hy;
-                    sr.tx = r.hx;
-                    sr.ty = r.hy;
-                    sr.angle = r.angle;
-                    sr.targetAngle = r.angle;
+                    sr.id = r.id; sr.name = r.name; sr.color = r.color;
+                    sr.hx = r.hx; sr.hy = r.hy;
+                    sr.tx = r.hx; sr.ty = r.hy;
+                    sr.angle = r.angle; sr.targetAngle = r.angle;
                     sr.len = Math.max(START_LEN, r.len);
                     sr.boosting = r.boosting;
+                    sr.lastServerUpdate = System.currentTimeMillis();
                     rebuildSmoothTrail(sr, r.pts, r.n);
                     smoothRemotes.put(r.id, sr);
                 } else {
-                    sr.name = r.name;
-                    sr.color = r.color;
-                    sr.tx = r.hx;
-                    sr.ty = r.hy;
+                    // Update target saja, jangan langsung pindah
+                    sr.name = r.name; sr.color = r.color;
+                    sr.tx = r.hx; sr.ty = r.hy;
                     sr.targetAngle = r.angle;
                     sr.len = Math.max(START_LEN, r.len);
                     sr.boosting = r.boosting;
+                    sr.lastServerUpdate = System.currentTimeMillis();
+                    // Rebuild trail dari data server biar ekor nggak patah
+                    if (r.n > 1) rebuildSmoothTrail(sr, r.pts, r.n);
                 }
             }
             smoothRemotes.keySet().retainAll(activeIds);
@@ -322,41 +262,54 @@ public class GameView extends View {
 
         renderRemotes.clear();
         for (SmoothRemote sr : smoothRemotes.values()) {
+            // Smooth angle
             float diffAngle = wrap(sr.targetAngle - sr.angle);
-            sr.angle = wrap(sr.angle + diffAngle * 0.35f);
+            sr.angle = wrap(sr.angle + diffAngle * 0.25f);
 
+            // Hitung arah ke target
             float errX = sr.tx - sr.hx;
             float errY = sr.ty - sr.hy;
             float errDist = (float) Math.hypot(errX, errY);
 
-            float baseSpeed = sr.boosting ? 6.6f : 3.4f;
-            float catchup = Math.min(baseSpeed * 1.8f, errDist * 0.2f);
-            float actualSpeed = baseSpeed + catchup;
+            if (errDist > 0.5f) {
+                // Gerak ke arah target, kecepatan proporsional jarak
+                // Tapi dibatasi biar nggak loncat
+                float baseSpeed = sr.boosting ? 6.6f : 3.4f;
+                float speed = Math.min(baseSpeed * 2.5f, errDist * 0.3f);
+                speed = Math.max(baseSpeed * 0.5f, speed);
 
-            float nextX = sr.hx + (float) Math.cos(sr.angle) * actualSpeed;
-            float nextY = sr.hy + (float) Math.sin(sr.angle) * actualSpeed;
+                float dirX = errX / errDist;
+                float dirY = errY / errDist;
 
-            nextX += errX * 0.15f;
-            nextY += errY * 0.15f;
+                float nextX = sr.hx + dirX * speed;
+                float nextY = sr.hy + dirY * speed;
 
-            appendSmoothTrail(sr, nextX, nextY);
+                // Clamp biar nggak overshoot
+                float newErrX = sr.tx - nextX;
+                float newErrY = sr.ty - nextY;
+                if (newErrX * errX < 0) nextX = sr.tx;
+                if (newErrY * errY < 0) nextY = sr.ty;
+
+                appendSmoothTrail(sr, nextX, nextY);
+            }
 
             int n = sr.trail.size() + 1;
             float[] pts = new float[n * 2];
-            pts[0] = sr.hx;
-            pts[1] = sr.hy;
+            pts[0] = sr.hx; pts[1] = sr.hy;
             for (int i = 0; i < sr.trail.size(); i++) {
                 float[] t = sr.trail.get(i);
                 pts[2 * (i + 1)] = t[0];
                 pts[2 * (i + 1) + 1] = t[1];
             }
-            renderRemotes.add(new Remote(
-                    sr.id, sr.name, sr.color, sr.hx, sr.hy,
-                    sr.angle, sr.boosting, sr.len, pts, n));
+            renderRemotes.add(new Remote(sr.id, sr.name, sr.color,
+                sr.hx, sr.hy, sr.angle, sr.boosting, sr.len, pts, n));
         }
     }
 
     private void rebuildSmoothTrail(SmoothRemote sr, float[] pts, int n) {
+        // Simpan posisi kepala sekarang biar nggak reset
+        float savedHx = sr.hx;
+        float savedHy = sr.hy;
         sr.trail.clear();
         if (n >= 2) {
             for (int i = 0; i < n - 1; i++) {
@@ -370,29 +323,29 @@ public class GameView extends View {
                 }
             }
         }
+        // Restore kepala — jangan reset ke posisi server
+        sr.hx = savedHx;
+        sr.hy = savedHy;
     }
 
     private void appendSmoothTrail(SmoothRemote sr, float nextX, float nextY) {
         float dx = nextX - sr.hx;
         float dy = nextY - sr.hy;
-        float dist = (float) Math.hypot(dx, dy);
-        int steps = Math.max(1, (int) Math.ceil(dist / (SEG * 0.8f)));
-        float stepX = dx / steps;
-        float stepY = dy / steps;
+        if (Math.abs(dx) < 0.1f && Math.abs(dy) < 0.1f) return;
 
-        for (int s = 0; s < steps; s++) {
-            sr.hx += stepX;
-            sr.hy += stepY;
-            if (sr.trail.isEmpty()) {
-                sr.trail.add(new float[]{sr.hx, sr.hy});
-            } else {
-                float[] anchor = sr.trail.get(0);
-                float ax = sr.hx - anchor[0], ay = sr.hy - anchor[1];
-                if (ax * ax + ay * ay >= SEG * SEG) {
-                    sr.trail.add(0, new float[]{sr.hx, sr.hy});
-                }
+        sr.hx = nextX;
+        sr.hy = nextY;
+
+        if (sr.trail.isEmpty()) {
+            sr.trail.add(new float[]{sr.hx, sr.hy});
+        } else {
+            float[] anchor = sr.trail.get(0);
+            float ax = sr.hx - anchor[0], ay = sr.hy - anchor[1];
+            if (ax * ax + ay * ay >= SEG * SEG) {
+                sr.trail.add(0, new float[]{sr.hx, sr.hy});
             }
         }
+
         int max = (int) (sr.len / SEG) + 1;
         while (sr.trail.size() > max) {
             sr.trail.remove(sr.trail.size() - 1);
@@ -426,21 +379,17 @@ public class GameView extends View {
         paint.setColor(0xFFFF3B30);
         c.drawRect(0, 0, WORLD, WORLD, paint);
 
-        // Render Makanan
         paint.setStyle(Paint.Style.FILL);
         for (int i = 0; i < currentFoodCount; i++) {
             paint.setColor(foodColors[i]);
             c.drawCircle(foodBuffer[3 * i], foodBuffer[3 * i + 1], foodBuffer[3 * i + 2], paint);
         }
 
-        // Render Cacing Musuh & Bot
         for (Remote r : renderRemotes) {
             if (r.n < 1) continue;
-            float enemyRadius = calcBodyRadius(r.len);
-            drawSnake(c, r.pts, r.n, r.color, r.name, r.angle, enemyRadius);
+            drawSnake(c, r.pts, r.n, r.color, r.name, r.angle, calcBodyRadius(r.len));
         }
 
-        // Render Cacing Pemain Utama
         if (alive && trailPointsCount > 0) {
             drawSnake(c, trailBuffer, trailPointsCount, myColor, myName, angle, myRadius);
         }
@@ -450,104 +399,71 @@ public class GameView extends View {
         drawControls(c);
     }
 
-    // Menggambar segmen dari ekor ke kepala agar tumpukan cacing memiliki garis pemisah 3D
     private void drawSnake(Canvas c, float[] p, int n, int color, String name, float knownAngle, float r) {
         if (n < 1) return;
-
         int darkBorder = darkenColor(color, 0.48f);
         int lightTint = lightenColor(color, 1.20f);
-
         int step = Math.max(1, Math.round(r * 0.40f / SEG));
 
-        // 1. Gambar badan dari EKOR ke KEPALA
         paint.setStyle(Paint.Style.FILL);
         for (int i = n - 1; i >= 1; i -= step) {
-            float x = p[2 * i];
-            float y = p[2 * i + 1];
-
-            // Lingkaran luar (garis tepi pemisah tumpukan)
             paint.setColor(darkBorder);
-            c.drawCircle(x, y, r, paint);
-
-            // Lingkaran isi badan dengan pola belang/sisik
+            c.drawCircle(p[2 * i], p[2 * i + 1], r, paint);
             paint.setColor(((i / step) % 2 == 0) ? color : lightTint);
-            c.drawCircle(x, y, r - 2.2f, paint);
+            c.drawCircle(p[2 * i], p[2 * i + 1], r - 2.2f, paint);
         }
 
-        // 2. Gambar Kepala
-        float headX = p[0];
-        float headY = p[1];
-
         paint.setColor(darkBorder);
-        c.drawCircle(headX, headY, r, paint);
-
+        c.drawCircle(p[0], p[1], r, paint);
         paint.setColor(color);
-        c.drawCircle(headX, headY, r - 2.2f, paint);
+        c.drawCircle(p[0], p[1], r - 2.2f, paint);
 
-        // 3. Gambar Mata
         float dx = (float) Math.cos(knownAngle);
         float dy = (float) Math.sin(knownAngle);
-
         float eyeSpacing = r * 0.52f;
         float eyeForward = r * 0.36f;
         float px = -dy * eyeSpacing, py = dx * eyeSpacing;
         float ex = dx * eyeForward, ey = dy * eyeForward;
 
-        float leftEyeX = headX + ex + px;
-        float leftEyeY = headY + ey + py;
-        float rightEyeX = headX + ex - px;
-        float rightEyeY = headY + ey - py;
-
-        float eyeRadius = r * 0.40f;
-        float pupilRadius = eyeRadius * 0.50f;
+        float lx = p[0] + ex + px, ly = p[1] + ey + py;
+        float rx2 = p[0] + ex - px, ry2 = p[1] + ey - py;
+        float eyeR = r * 0.40f, pupilR = eyeR * 0.50f;
 
         paint.setColor(0xFF222222);
-        c.drawCircle(leftEyeX, leftEyeY, eyeRadius + 0.8f, paint);
-        c.drawCircle(rightEyeX, rightEyeY, eyeRadius + 0.8f, paint);
-
+        c.drawCircle(lx, ly, eyeR + 0.8f, paint);
+        c.drawCircle(rx2, ry2, eyeR + 0.8f, paint);
         paint.setColor(Color.WHITE);
-        c.drawCircle(leftEyeX, leftEyeY, eyeRadius, paint);
-        c.drawCircle(rightEyeX, rightEyeY, eyeRadius, paint);
-
+        c.drawCircle(lx, ly, eyeR, paint);
+        c.drawCircle(rx2, ry2, eyeR, paint);
         paint.setColor(Color.BLACK);
-        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.30f), leftEyeY + dy * (eyeRadius * 0.30f), pupilRadius, paint);
-        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.30f), rightEyeY + dy * (eyeRadius * 0.30f), pupilRadius, paint);
-
+        c.drawCircle(lx + dx * (eyeR * 0.30f), ly + dy * (eyeR * 0.30f), pupilR, paint);
+        c.drawCircle(rx2 + dx * (eyeR * 0.30f), ry2 + dy * (eyeR * 0.30f), pupilR, paint);
         paint.setColor(Color.WHITE);
-        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.30f) - 0.8f, leftEyeY + dy * (eyeRadius * 0.30f) - 0.8f, pupilRadius * 0.35f, paint);
-        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.30f) - 0.8f, rightEyeY + dy * (eyeRadius * 0.30f) - 0.8f, pupilRadius * 0.35f, paint);
+        c.drawCircle(lx + dx * (eyeR * 0.30f) - 0.8f, ly + dy * (eyeR * 0.30f) - 0.8f, pupilR * 0.35f, paint);
+        c.drawCircle(rx2 + dx * (eyeR * 0.30f) - 0.8f, ry2 + dy * (eyeR * 0.30f) - 0.8f, pupilR * 0.35f, paint);
 
-        // 4. Nama Pemain
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTextSize(Math.max(22f, r * 1.5f));
         paint.setColor(Color.WHITE);
-        c.drawText(name, headX, headY - r - 10f, paint);
+        c.drawText(name, p[0], p[1] - r - 10f, paint);
     }
 
     private static int darkenColor(int color, float factor) {
-        int a = Color.alpha(color);
-        int r = Math.round(Color.red(color) * factor);
-        int g = Math.round(Color.green(color) * factor);
-        int b = Math.round(Color.blue(color) * factor);
-        return Color.argb(a, Math.max(0, Math.min(255, r)),
-                Math.max(0, Math.min(255, g)),
-                Math.max(0, Math.min(255, b)));
+        return Color.argb(Color.alpha(color),
+            Math.max(0, Math.min(255, Math.round(Color.red(color) * factor))),
+            Math.max(0, Math.min(255, Math.round(Color.green(color) * factor))),
+            Math.max(0, Math.min(255, Math.round(Color.blue(color) * factor))));
     }
 
     private static int lightenColor(int color, float factor) {
-        int a = Color.alpha(color);
-        int r = Math.round(Color.red(color) * factor);
-        int g = Math.round(Color.green(color) * factor);
-        int b = Math.round(Color.blue(color) * factor);
-        return Color.argb(a, Math.max(0, Math.min(255, r)),
-                Math.max(0, Math.min(255, g)),
-                Math.max(0, Math.min(255, b)));
+        return Color.argb(Color.alpha(color),
+            Math.max(0, Math.min(255, Math.round(Color.red(color) * factor))),
+            Math.max(0, Math.min(255, Math.round(Color.green(color) * factor))),
+            Math.max(0, Math.min(255, Math.round(Color.blue(color) * factor))));
     }
 
     private void drawHud(Canvas c) {
-        float mapLeft = 24f;
-        float mapTop = 24f;
-        float mapSize = 145f;
+        float mapLeft = 24f, mapTop = 24f, mapSize = 145f;
         minimapRect.set(mapLeft, mapTop, mapLeft + mapSize, mapTop + mapSize);
 
         paint.setStyle(Paint.Style.FILL);
@@ -568,31 +484,25 @@ public class GameView extends View {
         for (Remote r : renderRemotes) {
             float rx = mapLeft + Math.max(4f, Math.min(mapSize - 4f, (r.hx / WORLD) * mapSize));
             float ry = mapTop + Math.max(4f, Math.min(mapSize - 4f, (r.hy / WORLD) * mapSize));
-            paint.setColor(r.color);
-            c.drawCircle(rx, ry, 3.8f, paint);
+            paint.setColor(r.color); c.drawCircle(rx, ry, 3.8f, paint);
         }
 
         if (alive) {
             float mx = mapLeft + Math.max(5f, Math.min(mapSize - 5f, (hx / WORLD) * mapSize));
             float my = mapTop + Math.max(5f, Math.min(mapSize - 5f, (hy / WORLD) * mapSize));
-            paint.setColor(Color.WHITE);
-            c.drawCircle(mx, my, 6.2f, paint);
-            paint.setColor(0xFF00E676);
-            c.drawCircle(mx, my, 4.2f, paint);
+            paint.setColor(Color.WHITE); c.drawCircle(mx, my, 6.2f, paint);
+            paint.setColor(0xFF00E676); c.drawCircle(mx, my, 4.2f, paint);
         }
 
         paint.setTextAlign(Paint.Align.LEFT);
-        paint.setTextSize(15f);
-        paint.setColor(0xAAFFFFFF);
+        paint.setTextSize(15f); paint.setColor(0xAAFFFFFF);
         c.drawText("MAP", mapLeft + 8f, mapTop + 18f, paint);
 
         float infoX = mapLeft + mapSize + 22f;
-        int weight = (int) (len * 1.5f);
-        paint.setTextSize(26f);
-        paint.setColor(Color.WHITE);
+        paint.setTextSize(26f); paint.setColor(Color.WHITE);
         c.drawText("Panjang: " + (int) len + " m", infoX, 52f, paint);
         paint.setColor(0xFFFFD54F);
-        c.drawText("Berat: " + weight + " kg", infoX, 86f, paint);
+        c.drawText("Berat: " + (int)(len * 1.5f) + " kg", infoX, 86f, paint);
         paint.setColor(Color.WHITE);
         c.drawText("Pemain: " + (renderRemotes.size() + 1), infoX, 120f, paint);
 
@@ -604,9 +514,7 @@ public class GameView extends View {
         List<Remote> board = new ArrayList<>(renderRemotes);
         board.add(new Remote("me", myName, myColor, hx, hy, angle, isBoosting, len, null, 0));
         Collections.sort(board, (a, b) -> Float.compare(b.len, a.len));
-
-        paint.setTextSize(24f);
-        paint.setTextAlign(Paint.Align.RIGHT);
+        paint.setTextSize(24f); paint.setTextAlign(Paint.Align.RIGHT);
         for (int i = 0; i < board.size() && i < 6; i++) {
             Remote r = board.get(i);
             paint.setColor(r.color);
@@ -618,28 +526,20 @@ public class GameView extends View {
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(0x44FFFFFF);
         c.drawCircle(joyCenterX, joyCenterY, JOY_RADIUS, paint);
-
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(4f);
-        paint.setColor(0x88FFFFFF);
+        paint.setStrokeWidth(4f); paint.setColor(0x88FFFFFF);
         c.drawCircle(joyCenterX, joyCenterY, JOY_RADIUS, paint);
-
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(0xCC69F0AE);
         c.drawCircle(joyKnobX, joyKnobY, JOY_KNOB_RADIUS, paint);
 
-        paint.setStyle(Paint.Style.FILL);
         paint.setColor(isBoosting ? 0xDDFF5252 : 0x66FF9800);
         c.drawCircle(boostCenterX, boostCenterY, BOOST_RADIUS, paint);
-
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(5f);
-        paint.setColor(0xFFFFFFFF);
+        paint.setStrokeWidth(5f); paint.setColor(0xFFFFFFFF);
         c.drawCircle(boostCenterX, boostCenterY, BOOST_RADIUS, paint);
-
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.WHITE);
-        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setColor(Color.WHITE); paint.setTextAlign(Paint.Align.CENTER);
         paint.setTextSize(28f);
         c.drawText("BUS", boostCenterX, boostCenterY + 10f, paint);
     }
@@ -649,52 +549,38 @@ public class GameView extends View {
         int action = e.getActionMasked();
         int idx = e.getActionIndex();
         int pid = e.getPointerId(idx);
-        float x = e.getX(idx);
-        float y = e.getY(idx);
+        float x = e.getX(idx), y = e.getY(idx);
 
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN: {
                 float dBoost = (float) Math.hypot(x - boostCenterX, y - boostCenterY);
                 if (dBoost <= BOOST_RADIUS * 1.35f && boostPointerId == -1) {
-                    boostPointerId = pid;
-                    isBoosting = true;
+                    boostPointerId = pid; isBoosting = true;
                 } else if (x < getWidth() * 0.6f && joyPointerId == -1) {
-                    joyPointerId = pid;
-                    updateJoystickKnob(x, y);
+                    joyPointerId = pid; updateJoystickKnob(x, y);
                 }
                 break;
             }
-
             case MotionEvent.ACTION_MOVE: {
                 for (int i = 0; i < e.getPointerCount(); i++) {
-                    int id = e.getPointerId(i);
-                    if (id == joyPointerId) {
+                    if (e.getPointerId(i) == joyPointerId)
                         updateJoystickKnob(e.getX(i), e.getY(i));
-                    }
                 }
                 break;
             }
-
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_POINTER_UP: {
                 if (pid == joyPointerId) {
-                    joyPointerId = -1;
-                    joyKnobX = joyCenterX;
-                    joyKnobY = joyCenterY;
+                    joyPointerId = -1; joyKnobX = joyCenterX; joyKnobY = joyCenterY;
                 } else if (pid == boostPointerId) {
-                    boostPointerId = -1;
-                    isBoosting = false;
+                    boostPointerId = -1; isBoosting = false;
                 }
                 break;
             }
-
             case MotionEvent.ACTION_CANCEL: {
-                joyPointerId = -1;
-                boostPointerId = -1;
-                isBoosting = false;
-                joyKnobX = joyCenterX;
-                joyKnobY = joyCenterY;
+                joyPointerId = -1; boostPointerId = -1; isBoosting = false;
+                joyKnobX = joyCenterX; joyKnobY = joyCenterY;
                 break;
             }
         }
@@ -702,14 +588,9 @@ public class GameView extends View {
     }
 
     private void updateJoystickKnob(float touchX, float touchY) {
-        float dx = touchX - joyCenterX;
-        float dy = touchY - joyCenterY;
+        float dx = touchX - joyCenterX, dy = touchY - joyCenterY;
         float dist = (float) Math.hypot(dx, dy);
-        if (dist > JOY_RADIUS) {
-            dx = (dx / dist) * JOY_RADIUS;
-            dy = (dy / dist) * JOY_RADIUS;
-        }
-        joyKnobX = joyCenterX + dx;
-        joyKnobY = joyCenterY + dy;
+        if (dist > JOY_RADIUS) { dx = (dx / dist) * JOY_RADIUS; dy = (dy / dist) * JOY_RADIUS; }
+        joyKnobX = joyCenterX + dx; joyKnobY = joyCenterY + dy;
     }
 }
