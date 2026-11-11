@@ -12,9 +12,11 @@ import java.util.Random;
 public class SoundManager {
     private static SoundPool soundPool;
     private static int soundDoublePopId = -1;
+    private static int soundBoostId = -1;
+    private static int boostStreamId = 0;
     private static boolean ready = false;
     private static final Random rnd = new Random();
-    private static long lastPlayTime = 0;
+    private static long lastPopTime = 0;
 
     public static void init(Context ctx) {
         if (ready) return;
@@ -25,11 +27,11 @@ public class SoundManager {
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build();
             soundPool = new SoundPool.Builder()
-                    .setMaxStreams(6)
+                    .setMaxStreams(8)
                     .setAudioAttributes(attrs)
                     .build();
         } else {
-            soundPool = new SoundPool(6, AudioManager.STREAM_MUSIC, 0);
+            soundPool = new SoundPool(8, AudioManager.STREAM_MUSIC, 0);
         }
 
         soundPool.setOnLoadCompleteListener((sp, sampleId, status) -> {
@@ -38,9 +40,13 @@ public class SoundManager {
 
         new Thread(() -> {
             try {
-                File soundFile = new File(ctx.getCacheDir(), "double_pop.wav");
-                generateDoublePopWav(soundFile);
-                soundDoublePopId = soundPool.load(soundFile.getAbsolutePath(), 1);
+                File popFile = new File(ctx.getCacheDir(), "double_pop.wav");
+                generateDoublePopWav(popFile);
+                soundDoublePopId = soundPool.load(popFile.getAbsolutePath(), 1);
+
+                File boostFile = new File(ctx.getCacheDir(), "boost_whoosh.wav");
+                generateBoostWav(boostFile);
+                soundBoostId = soundPool.load(boostFile.getAbsolutePath(), 1);
             } catch (Exception ignored) {}
         }).start();
     }
@@ -49,11 +55,24 @@ public class SoundManager {
         if (!ready || soundPool == null || soundDoublePopId == -1) return;
 
         long now = System.currentTimeMillis();
-        if (now - lastPlayTime < 45) return;
-        lastPlayTime = now;
+        if (now - lastPopTime < 45) return;
+        lastPopTime = now;
 
         float rate = 0.95f + rnd.nextFloat() * 0.17f;
         soundPool.play(soundDoublePopId, 0.75f, 0.75f, 1, 0, rate);
+    }
+
+    public static void startBoost() {
+        if (!ready || soundPool == null || soundBoostId == -1) return;
+        stopBoost();
+        boostStreamId = soundPool.play(soundBoostId, 0.85f, 0.85f, 2, -1, 1.0f);
+    }
+
+    public static void stopBoost() {
+        if (soundPool != null && boostStreamId != 0) {
+            soundPool.stop(boostStreamId);
+            boostStreamId = 0;
+        }
     }
 
     public static void release() {
@@ -91,7 +110,32 @@ public class SoundManager {
             pcmData[2 * i] = (byte) (val & 0xFF);
             pcmData[2 * i + 1] = (byte) ((val >> 8) & 0xFF);
         }
+        writeWav(outFile, pcmData, sampleRate);
+    }
 
+    /** Sintesis suara whoosh turbo / jet saat cacing boost */
+    private static void generateBoostWav(File outFile) throws Exception {
+        int sampleRate = 22050;
+        float duration = 0.45f;
+        int totalSamples = (int) (sampleRate * duration);
+        byte[] pcmData = new byte[totalSamples * 2];
+        Random noiseRnd = new Random(42);
+
+        for (int i = 0; i < totalSamples; i++) {
+            float t = i / (float) sampleRate;
+            float envelope = (float) Math.sin(Math.PI * (t / duration));
+            float noise = (noiseRnd.nextFloat() * 2f - 1f) * 0.35f;
+            float tone = (float) Math.sin(2.0 * Math.PI * (160f + 70f * t) * t) * 0.65f;
+            float sample = (tone + noise) * envelope * 0.8f;
+
+            short val = (short) (Math.max(-1f, Math.min(1f, sample)) * 32767);
+            pcmData[2 * i] = (byte) (val & 0xFF);
+            pcmData[2 * i + 1] = (byte) ((val >> 8) & 0xFF);
+        }
+        writeWav(outFile, pcmData, sampleRate);
+    }
+
+    private static void writeWav(File outFile, byte[] pcmData, int sampleRate) throws Exception {
         try (FileOutputStream fos = new FileOutputStream(outFile)) {
             int subChunk2Size = pcmData.length;
             int chunkSize = 36 + subChunk2Size;

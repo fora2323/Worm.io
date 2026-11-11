@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
@@ -16,6 +17,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 public class GameView extends View {
@@ -59,12 +61,17 @@ public class GameView extends View {
         final ArrayList<float[]> trail = new ArrayList<>();
     }
 
+    private static class BoostParticle {
+        float x, y, vx, vy, r;
+        int alpha, color;
+    }
+
     static final float WORLD = 6000f;
     static final int FOOD_COUNT = 800;
     static final int MAX_FOOD_CAP = 1200;
     static final float SEG = 4f;
     static final float START_LEN = 120f;
-    static final float BASE_HEAD_R = 10f;
+    static final float BASE_HEAD_R = 12f;
     static final int SYNC_STEP = 4;
     static final int SYNC_MAX = 35;
 
@@ -72,23 +79,26 @@ public class GameView extends View {
         "Viper", "Cobra", "Python", "Anaconda", "Dragon", "Turbo", "Titan", "Hydra"
     };
 
+    // Radius cacing benar-benar membesar secara signifikan
     public static float calcBodyRadius(float length) {
         float extra = Math.max(0, length - START_LEN);
-        return BASE_HEAD_R + (float) Math.sqrt(extra) * 0.45f;
+        return BASE_HEAD_R + (float) Math.pow(extra, 0.55) * 0.68f;
     }
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF minimapRect = new RectF();
     private final Map<String, SmoothRemote> smoothRemotes = new HashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Random rnd = new Random();
 
     private volatile List<Remote> incomingRemotes = null;
     private final List<Remote> renderRemotes = new ArrayList<>();
+    private final List<BoostParticle> particles = new ArrayList<>();
     private volatile float[] snapshot = new float[5];
     private volatile boolean alive = true;
 
     // Buffer Native C++
-    private final float[] nativeState = new float[6];
+    private final float[] nativeState = new float[7];
     private final float[] trailBuffer = new float[12000];
     private final float[] foodBuffer = new float[MAX_FOOD_CAP * 3];
     private final int[] foodColors = new int[MAX_FOOD_CAP];
@@ -97,6 +107,7 @@ public class GameView extends View {
     private final int[] botTrailOffsets = new int[10 * 2];
     private int trailPointsCount = 0;
     private int currentFoodCount = 0;
+    private int kills = 0;
 
     private boolean singlePlayer = false;
     private String roomCode = null;
@@ -143,6 +154,7 @@ public class GameView extends View {
         this.roomCode = code;
         smoothRemotes.clear();
         renderRemotes.clear();
+        particles.clear();
         if (single) {
             GameEngine.nativeInitBots(8);
         } else {
@@ -175,6 +187,7 @@ public class GameView extends View {
     public void stop() {
         running = false;
         handler.removeCallbacks(tick);
+        SoundManager.stopBoost();
         SoundManager.release();
     }
 
@@ -190,7 +203,10 @@ public class GameView extends View {
         joyPointerId = -1;
         boostPointerId = -1;
         isBoosting = false;
+        kills = 0;
         alive = true;
+        particles.clear();
+        SoundManager.stopBoost();
     }
 
     @Override
@@ -222,19 +238,47 @@ public class GameView extends View {
         len = nativeState[3];
         myRadius = nativeState[4];
         alive = nativeState[5] == 1.0f;
+        kills = (int) nativeState[6];
 
-        // Mainkan sound pop saat makanan dimakan
         if (len > prevLen + 0.1f) {
             SoundManager.playDoublePop();
         }
 
         if (!alive) {
+            SoundManager.stopBoost();
             if (listener != null) listener.onDied(len);
             return;
         }
 
         trailPointsCount = GameEngine.nativeGetTrail(trailBuffer);
         currentFoodCount = GameEngine.nativeGetFoodData(foodBuffer, foodColors);
+
+        // Efek partikel turbo saat boost
+        if (isBoosting && trailPointsCount > 2) {
+            for (int k = 0; k < 2; k++) {
+                BoostParticle p = new BoostParticle();
+                float spawnAngle = angle + (float) Math.PI + (rnd.nextFloat() - 0.5f) * 0.9f;
+                p.x = hx - (float) Math.cos(angle) * myRadius;
+                p.y = hy - (float) Math.sin(angle) * myRadius;
+                p.vx = (float) Math.cos(spawnAngle) * (4f + rnd.nextFloat() * 5f);
+                p.vy = (float) Math.sin(spawnAngle) * (4f + rnd.nextFloat() * 5f);
+                p.r = 3.5f + rnd.nextFloat() * (myRadius * 0.35f);
+                p.alpha = 255;
+                p.color = rnd.nextBoolean() ? 0xFFFFD740 : 0xFFFF5252;
+                particles.add(p);
+            }
+        }
+
+        for (int i = particles.size() - 1; i >= 0; i--) {
+            BoostParticle p = particles.get(i);
+            p.x += p.vx;
+            p.y += p.vy;
+            p.alpha -= 18;
+            p.r *= 0.94f;
+            if (p.alpha <= 0) {
+                particles.remove(i);
+            }
+        }
 
         if (singlePlayer) {
             int botCount = GameEngine.nativeGetBotsData(botInfoBuffer, botTrailsBuffer, botTrailOffsets);
@@ -266,6 +310,7 @@ public class GameView extends View {
                 float dx = r.pts[2 * i] - hx, dy = r.pts[2 * i + 1] - hy;
                 if (dx * dx + dy * dy < killDist * killDist) {
                     alive = false;
+                    SoundManager.stopBoost();
                     if (listener != null) listener.onDied(len);
                     return;
                 }
@@ -416,7 +461,8 @@ public class GameView extends View {
     protected void onDraw(Canvas c) {
         c.drawColor(0xFF0E1217);
 
-        float scale = Math.max(0.4f, 1f - (len - START_LEN) / 2400f);
+        // Zoom kamera seimbang agar cacing terlihat jelas membesar tebal
+        float scale = Math.max(0.35f, (float) Math.pow(START_LEN / Math.max(START_LEN, len), 0.22f));
         c.save();
         c.translate(getWidth() / 2f, getHeight() / 2f);
         c.scale(scale, scale);
@@ -440,16 +486,22 @@ public class GameView extends View {
             c.drawCircle(foodBuffer[3 * i], foodBuffer[3 * i + 1], foodBuffer[3 * i + 2], paint);
         }
 
+        // Efek partikel boost
+        for (BoostParticle p : particles) {
+            paint.setColor((p.color & 0x00FFFFFF) | (p.alpha << 24));
+            c.drawCircle(p.x, p.y, p.r, paint);
+        }
+
         // Cacing Musuh & Bot
         for (Remote r : renderRemotes) {
             if (r.n < 1) continue;
             float enemyRadius = calcBodyRadius(r.len);
-            drawSnake(c, r.pts, r.n, r.color, r.name, r.angle, enemyRadius);
+            drawSnakeClassic(c, r.pts, r.n, r.color, r.name, r.angle, enemyRadius);
         }
 
         // Cacing Pemain Utama
         if (alive && trailPointsCount > 0) {
-            drawSnake(c, trailBuffer, trailPointsCount, myColor, myName, angle, myRadius);
+            drawSnakeClassic(c, trailBuffer, trailPointsCount, myColor, myName, angle, myRadius);
         }
 
         c.restore();
@@ -457,43 +509,49 @@ public class GameView extends View {
         drawControls(c);
     }
 
-    private void drawSnake(Canvas c, float[] p, int n, int color, String name, float knownAngle, float r) {
+    /** Model Cacing Halus Awal yang Keren dan Bersih (Smooth Continuous Path) */
+    private void drawSnakeClassic(Canvas c, float[] p, int n, int color, String name, float knownAngle, float r) {
         if (n < 1) return;
 
-        int darkBorder = darkenColor(color, 0.48f);
-        int lightTint = lightenColor(color, 1.20f);
-
-        int step = Math.max(1, Math.round(r * 0.40f / SEG));
-
-        // 1. Gambar segmen dari ekor ke kepala (anti numpuk 1 warna)
-        paint.setStyle(Paint.Style.FILL);
-        for (int i = n - 1; i >= 1; i -= step) {
-            float x = p[2 * i];
-            float y = p[2 * i + 1];
-
-            paint.setColor(darkBorder);
-            c.drawCircle(x, y, r, paint);
-
-            paint.setColor(((i / step) % 2 == 0) ? color : lightTint);
-            c.drawCircle(x, y, r - 2.2f, paint);
+        Path path = new Path();
+        if (n < 2) {
+            path.moveTo(p[0], p[1]);
+        } else {
+            path.moveTo(p[0], p[1]);
+            for (int i = 1; i < n - 1; i++) {
+                float mx = (p[2 * i] + p[2 * (i + 1)]) / 2f;
+                float my = (p[2 * i + 1] + p[2 * (i + 1) + 1]) / 2f;
+                path.quadTo(p[2 * i], p[2 * i + 1], mx, my);
+            }
+            path.lineTo(p[2 * (n - 1)], p[2 * (n - 1) + 1]);
         }
 
-        // 2. Gambar Kepala
+        // 1. Garis tepi gelap luar (outline agar saat numpuk tetap terlihat batasnya)
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setStrokeWidth(r * 2f + 3.5f);
+        paint.setColor(0xCC050A0E);
+        c.drawPath(path, paint);
+
+        // 2. Badan utama solid cerah
+        paint.setStrokeWidth(r * 2f);
+        paint.setColor(color);
+        c.drawPath(path, paint);
+
+        // 3. Kepala bulat
         float headX = p[0];
         float headY = p[1];
-
-        paint.setColor(darkBorder);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(color);
         c.drawCircle(headX, headY, r, paint);
 
-        paint.setColor(color);
-        c.drawCircle(headX, headY, r - 2.2f, paint);
-
-        // 3. Gambar Mata
+        // 4. Mata Putih & Pupil Hitam Cantik
         float dx = (float) Math.cos(knownAngle);
         float dy = (float) Math.sin(knownAngle);
 
         float eyeSpacing = r * 0.52f;
-        float eyeForward = r * 0.36f;
+        float eyeForward = r * 0.38f;
         float px = -dy * eyeSpacing, py = dx * eyeSpacing;
         float ex = dx * eyeForward, ey = dy * eyeForward;
 
@@ -505,47 +563,24 @@ public class GameView extends View {
         float eyeRadius = r * 0.40f;
         float pupilRadius = eyeRadius * 0.50f;
 
-        paint.setColor(0xFF222222);
-        c.drawCircle(leftEyeX, leftEyeY, eyeRadius + 0.8f, paint);
-        c.drawCircle(rightEyeX, rightEyeY, eyeRadius + 0.8f, paint);
-
         paint.setColor(Color.WHITE);
         c.drawCircle(leftEyeX, leftEyeY, eyeRadius, paint);
         c.drawCircle(rightEyeX, rightEyeY, eyeRadius, paint);
 
         paint.setColor(Color.BLACK);
-        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.30f), leftEyeY + dy * (eyeRadius * 0.30f), pupilRadius, paint);
-        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.30f), rightEyeY + dy * (eyeRadius * 0.30f), pupilRadius, paint);
+        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.32f), leftEyeY + dy * (eyeRadius * 0.32f), pupilRadius, paint);
+        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.32f), rightEyeY + dy * (eyeRadius * 0.32f), pupilRadius, paint);
 
+        // Kilau mata putih
         paint.setColor(Color.WHITE);
-        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.30f) - 0.8f, leftEyeY + dy * (eyeRadius * 0.30f) - 0.8f, pupilRadius * 0.35f, paint);
-        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.30f) - 0.8f, rightEyeY + dy * (eyeRadius * 0.30f) - 0.8f, pupilRadius * 0.35f, paint);
+        c.drawCircle(leftEyeX + dx * (eyeRadius * 0.32f) - 0.8f, leftEyeY + dy * (eyeRadius * 0.32f) - 0.8f, pupilRadius * 0.35f, paint);
+        c.drawCircle(rightEyeX + dx * (eyeRadius * 0.32f) - 0.8f, rightEyeY + dy * (eyeRadius * 0.32f) - 0.8f, pupilRadius * 0.35f, paint);
 
-        // 4. Nama
+        // 5. Nama Pemain
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTextSize(Math.max(22f, r * 1.5f));
         paint.setColor(Color.WHITE);
         c.drawText(name, headX, headY - r - 10f, paint);
-    }
-
-    private static int darkenColor(int color, float factor) {
-        int a = Color.alpha(color);
-        int r = Math.round(Color.red(color) * factor);
-        int g = Math.round(Color.green(color) * factor);
-        int b = Math.round(Color.blue(color) * factor);
-        return Color.argb(a, Math.max(0, Math.min(255, r)),
-                Math.max(0, Math.min(255, g)),
-                Math.max(0, Math.min(255, b)));
-    }
-
-    private static int lightenColor(int color, float factor) {
-        int a = Color.alpha(color);
-        int r = Math.round(Color.red(color) * factor);
-        int g = Math.round(Color.green(color) * factor);
-        int b = Math.round(Color.blue(color) * factor);
-        return Color.argb(a, Math.max(0, Math.min(255, r)),
-                Math.max(0, Math.min(255, g)),
-                Math.max(0, Math.min(255, b)));
     }
 
     private void drawHud(Canvas c) {
@@ -590,19 +625,22 @@ public class GameView extends View {
         paint.setColor(0xAAFFFFFF);
         c.drawText("MAP", mapLeft + 8f, mapTop + 18f, paint);
 
+        // Info HUD: Panjang, Berat (naik seiring ketebalan), Kills, dan Pemain
         float infoX = mapLeft + mapSize + 22f;
-        int weight = (int) (len * 1.5f);
+        int weight = (int) (myRadius * myRadius * 1.25f + len * 0.5f);
         paint.setTextSize(26f);
         paint.setColor(Color.WHITE);
-        c.drawText("Panjang: " + (int) len + " m", infoX, 52f, paint);
+        c.drawText("Panjang: " + (int) len + " m", infoX, 48f, paint);
         paint.setColor(0xFFFFD54F);
-        c.drawText("Berat: " + weight + " kg", infoX, 86f, paint);
+        c.drawText("Berat: " + weight + " kg", infoX, 80f, paint);
+        paint.setColor(0xFFFF5252);
+        c.drawText("Kill: " + kills, infoX, 112f, paint);
         paint.setColor(Color.WHITE);
-        c.drawText("Pemain: " + (renderRemotes.size() + 1), infoX, 120f, paint);
+        c.drawText("Pemain: " + (renderRemotes.size() + 1), infoX, 144f, paint);
 
         if (!singlePlayer && roomCode != null) {
             paint.setColor(0xFF69F0AE);
-            c.drawText("Room: " + roomCode, infoX, 154f, paint);
+            c.drawText("Room: " + roomCode, infoX, 176f, paint);
         }
 
         List<Remote> board = new ArrayList<>(renderRemotes);
@@ -663,6 +701,7 @@ public class GameView extends View {
                 if (dBoost <= BOOST_RADIUS * 1.35f && boostPointerId == -1) {
                     boostPointerId = pid;
                     isBoosting = true;
+                    SoundManager.startBoost();
                 } else if (x < getWidth() * 0.6f && joyPointerId == -1) {
                     joyPointerId = pid;
                     updateJoystickKnob(x, y);
@@ -689,6 +728,7 @@ public class GameView extends View {
                 } else if (pid == boostPointerId) {
                     boostPointerId = -1;
                     isBoosting = false;
+                    SoundManager.stopBoost();
                 }
                 break;
             }
@@ -699,6 +739,7 @@ public class GameView extends View {
                 isBoosting = false;
                 joyKnobX = joyCenterX;
                 joyKnobY = joyCenterY;
+                SoundManager.stopBoost();
                 break;
             }
         }

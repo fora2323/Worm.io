@@ -22,17 +22,20 @@ struct BotCacing {
 };
 
 static float gWorld = 6000.0f;
-static float gHeadR = 10.0f;
+static float gHeadR = 12.0f;
 static float gSeg = 4.0f;
 static float gStartLen = 120.0f;
 
+// Pemain Lokal
 static float pX = 3000.0f, pY = 3000.0f;
 static float pAngle = 0.0f;
 static float pAngularVel = 0.0f;
 static float pLen = 120.0f;
 static bool pAlive = true;
+static int gPlayerKills = 0;
 static std::deque<Point> pTrail;
 
+// Bot & Makanan
 static std::vector<Pellet> gFoods;
 static std::vector<BotCacing> gBots;
 static std::mt19937 rng(1337);
@@ -60,9 +63,10 @@ static float wrapAngle(float a) {
     return a;
 }
 
+// Rumus Radius: Benar-benar membesar secara signifikan seiring pertambahan panjang
 static float calcRadius(float len) {
     float extra = std::max(0.0f, len - gStartLen);
-    return gHeadR + std::sqrt(extra) * 0.45f;
+    return gHeadR + std::pow(extra, 0.55f) * 0.68f;
 }
 
 static void randomizeFood(Pellet& p) {
@@ -87,6 +91,40 @@ static void randomizeFood(Pellet& p) {
     }
 }
 
+static void dropFoodFromBot(const BotCacing& b) {
+    for (size_t k = 0; k < b.trail.size(); k += 4) {
+        Pellet p;
+        p.x = b.trail[k].x;
+        p.y = b.trail[k].y;
+        p.r = 10.0f;
+        p.val = 8.0f;
+        p.c = b.color;
+        if (gFoods.size() < 1200) {
+            gFoods.push_back(p);
+        } else {
+            gFoods[rng() % gFoods.size()] = p;
+        }
+    }
+}
+
+static void respawnBot(BotCacing& b) {
+    std::uniform_real_distribution<float> distSpawn(gWorld * 0.15f, gWorld * 0.85f);
+    std::uniform_real_distribution<float> distAngle(0.0f, 2.0f * M_PI);
+    b.hx = distSpawn(rng);
+    b.hy = distSpawn(rng);
+    b.angle = distAngle(rng);
+    b.targetAngle = b.angle;
+    b.len = gStartLen + (rng() % 50);
+    b.trail.clear();
+    int bn = (int)(b.len / gSeg);
+    for (int j = 0; j <= bn; j++) {
+        b.trail.push_back({
+            b.hx - std::cos(b.angle) * gSeg * j,
+            b.hy - std::sin(b.angle) * gSeg * j
+        });
+    }
+}
+
 extern "C" {
 
 JNIEXPORT void JNICALL
@@ -105,6 +143,7 @@ Java_com_worm_io_GameEngine_nativeInitWorld(JNIEnv* env, jclass clazz, jfloat wo
     pAngularVel = 0.0f;
     pLen = gStartLen;
     pAlive = true;
+    gPlayerKills = 0;
     pTrail.clear();
 
     int n = (int)(pLen / gSeg);
@@ -146,6 +185,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                                         jboolean isBoosting, jfloatArray outState) {
     if (!pAlive) return;
 
+    // 1. Update Pemain Lokal
     if (joyActive) {
         float target = std::atan2(joyDy, joyDx);
         float diff = wrapAngle(target - pAngle);
@@ -185,6 +225,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
     float currentRadius = calcRadius(pLen);
 
+    // Pemain makan makanan
     for (size_t i = 0; i < gFoods.size(); i++) {
         float dx = gFoods[i].x - pX;
         float dy = gFoods[i].y - pY;
@@ -195,6 +236,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
+    // 2. Update AI Bot
     for (auto& b : gBots) {
         b.timer--;
         if (b.timer <= 0) {
@@ -229,6 +271,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
         float botRadius = calcRadius(b.len);
 
+        // Bot makan makanan
         for (auto& f : gFoods) {
             float dx = f.x - b.hx;
             float dy = f.y - b.hy;
@@ -238,8 +281,30 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                 randomizeFood(f);
             }
         }
+    }
 
-        if (pAlive) {
+    // 3. Tabrakan: Bot menabrak Pemain (Player Kill Bot)
+    if (pAlive) {
+        for (auto& b : gBots) {
+            float botRadius = calcRadius(b.len);
+            float killDist = botRadius * 0.7f + currentRadius * 0.7f;
+            for (const auto& pt : pTrail) {
+                float dx = pt.x - b.hx;
+                float dy = pt.y - b.hy;
+                if (dx * dx + dy * dy < killDist * killDist) {
+                    gPlayerKills++;
+                    dropFoodFromBot(b);
+                    respawnBot(b);
+                    break;
+                }
+            }
+        }
+    }
+
+    // 4. Tabrakan: Pemain menabrak Bot (Pemain Mati)
+    if (pAlive) {
+        for (const auto& b : gBots) {
+            float botRadius = calcRadius(b.len);
             float killDist = currentRadius * 0.7f + botRadius * 0.7f;
             for (const auto& pt : b.trail) {
                 float dx = pt.x - pX;
@@ -249,58 +314,45 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                     break;
                 }
             }
-        }
-
-        if (pAlive) {
-            float killDist = botRadius * 0.7f + currentRadius * 0.7f;
-            for (const auto& pt : pTrail) {
-                float dx = pt.x - b.hx;
-                float dy = pt.y - b.hy;
-                if (dx * dx + dy * dy < killDist * killDist) {
-                    for (size_t k = 0; k < b.trail.size(); k += 4) {
-                        Pellet p;
-                        p.x = b.trail[k].x;
-                        p.y = b.trail[k].y;
-                        p.r = 9.5f;
-                        p.val = 8.0f;
-                        p.c = b.color;
-                        if (gFoods.size() < 1200) {
-                            gFoods.push_back(p);
-                        } else {
-                            gFoods[rng() % gFoods.size()] = p;
-                        }
-                    }
-
-                    std::uniform_real_distribution<float> distSpawn(gWorld * 0.2f, gWorld * 0.8f);
-                    std::uniform_real_distribution<float> distAngle(0.0f, 2.0f * M_PI);
-                    b.hx = distSpawn(rng);
-                    b.hy = distSpawn(rng);
-                    b.angle = distAngle(rng);
-                    b.targetAngle = b.angle;
-                    b.len = gStartLen + 20.0f;
-                    b.trail.clear();
-                    int bn = (int)(b.len / gSeg);
-                    for (int j = 0; j <= bn; j++) {
-                        b.trail.push_back({
-                            b.hx - std::cos(b.angle) * gSeg * j,
-                            b.hy - std::sin(b.angle) * gSeg * j
-                        });
-                    }
-                    break;
-                }
-            }
+            if (!pAlive) break;
         }
     }
 
-    jfloat temp[6];
+    // 5. Tabrakan: Bot vs Bot (Bot Saling Membunuh)
+    for (size_t i = 0; i < gBots.size(); i++) {
+        float r_i = calcRadius(gBots[i].len);
+        bool botDied = false;
+
+        for (size_t j = 0; j < gBots.size(); j++) {
+            if (i == j) continue;
+            float r_j = calcRadius(gBots[j].len);
+            float killDist = r_i * 0.7f + r_j * 0.7f;
+
+            for (const auto& pt : gBots[j].trail) {
+                float dx = pt.x - gBots[i].hx;
+                float dy = pt.y - gBots[i].hy;
+                if (dx * dx + dy * dy < killDist * killDist) {
+                    dropFoodFromBot(gBots[i]);
+                    respawnBot(gBots[i]);
+                    botDied = true;
+                    break;
+                }
+            }
+            if (botDied) break;
+        }
+    }
+
+    // Array output: [x, y, angle, len, radius, alive, kills]
+    jfloat temp[7];
     temp[0] = pX;
     temp[1] = pY;
     temp[2] = pAngle;
     temp[3] = pLen;
     temp[4] = currentRadius;
     temp[5] = pAlive ? 1.0f : 0.0f;
+    temp[6] = (float)gPlayerKills;
 
-    env->SetFloatArrayRegion(outState, 0, 6, temp);
+    env->SetFloatArrayRegion(outState, 0, 7, temp);
 }
 
 JNIEXPORT jint JNICALL
