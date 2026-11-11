@@ -29,6 +29,7 @@ static float gStartLen = 120.0f;
 // Pemain Lokal
 static float pX = 3000.0f, pY = 3000.0f;
 static float pAngle = 0.0f;
+static float pAngularVel = 0.0f; // Fix 1: Momentum sudut belok
 static float pLen = 120.0f;
 static bool pAlive = true;
 static std::deque<Point> pTrail;
@@ -87,11 +88,12 @@ Java_com_worm_io_GameEngine_nativeInitWorld(JNIEnv* env, jclass clazz, jfloat wo
         randomizeFood(gFoods[i]);
     }
 
-    // Reset Pemain
+    // Reset Pemain & Angular Velocity
     std::uniform_real_distribution<float> distSpawn(gWorld * 0.3f, gWorld * 0.7f);
     pX = distSpawn(rng);
     pY = distSpawn(rng);
     pAngle = 0.0f;
+    pAngularVel = 0.0f; // Reset angular velocity
     pLen = gStartLen;
     pAlive = true;
     pTrail.clear();
@@ -128,22 +130,23 @@ Java_com_worm_io_GameEngine_nativeInitBots(JNIEnv* env, jclass clazz, jint count
     }
 }
 
-/**
- * Update fisika cacing di C++
- * outState: [hx, hy, angle, len, radius, alive(1/0)]
- */
 JNIEXPORT void JNICALL
 Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                                         jfloat joyDx, jfloat joyDy, jboolean joyActive,
                                         jboolean isBoosting, jfloatArray outState) {
     if (!pAlive) return;
 
+    // Fix 1: Momentum & Smooth Turn
     if (joyActive) {
         float target = std::atan2(joyDy, joyDx);
         float diff = wrapAngle(target - pAngle);
-        pAngle += std::max(-0.09f, std::min(0.09f, diff));
+        float maxTurn = isBoosting ? 0.07f : 0.10f;
+        pAngularVel += diff * 0.18f;
+        pAngularVel = std::max(-maxTurn, std::min(maxTurn, pAngularVel));
+    } else {
+        pAngularVel *= 0.75f; // Damping saat joystick dilepas
     }
-    pAngle = wrapAngle(pAngle);
+    pAngle = wrapAngle(pAngle + pAngularVel);
 
     float speed = isBoosting ? 6.6f : 3.4f;
     int steps = isBoosting ? 2 : 1;
@@ -162,7 +165,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // Tabrak Dinding
+    // Tabrak Dinding Map
     if (pX < 0 || pY < 0 || pX > gWorld || pY > gWorld) {
         pAlive = false;
     }
@@ -174,7 +177,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
     float currentRadius = calcRadius(pLen);
 
-    // Makan Pellet (C++ Native Loop sangat cepat)
+    // Makan Pellet
     for (size_t i = 0; i < gFoods.size(); i++) {
         float dx = gFoods[i].x - pX;
         float dy = gFoods[i].y - pY;
@@ -185,7 +188,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // Salin status cacing ke array Java
     jfloat temp[6];
     temp[0] = pX;
     temp[1] = pY;
