@@ -21,7 +21,7 @@ public class GameActivity extends Activity {
     public static final String EXTRA_CODE = "code";
     public static final String EXTRA_NAME = "name";
     public static final String EXTRA_ID = "id";
-    private static final long SYNC_DELAY_MS = 150;
+    private static final long SYNC_DELAY_MS = 60;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private GameView view;
@@ -157,7 +157,7 @@ public class GameActivity extends Activity {
         }
     }
 
-    private void onDied(float score) {
+    private void onDied(float length, int weight, int kills) {
         if (!singlePlayer) {
             new Thread(() -> {
                 try {
@@ -166,13 +166,18 @@ public class GameActivity extends Activity {
             }).start();
         }
 
-        new AlertDialog.Builder(this)
-                .setTitle("Kamu mati")
-                .setMessage("Panjang akhir: " + (int) score)
-                .setCancelable(false)
-                .setPositiveButton("Main lagi", (d, w) -> respawn())
-                .setNegativeButton("Keluar", (d, w) -> leaveRoom())
-                .show();
+        ui.post(() -> {
+            new AlertDialog.Builder(this)
+                    .setTitle("💀 KAMU MATI!")
+                    .setMessage("Hasil Akhir Pertandingan Kamu:\n\n"
+                            + "🎯 Total Kill : " + kills + " Cacing\n"
+                            + "⚖️ Berat Akhir : " + weight + " kg\n"
+                            + "📏 Panjang Akhir : " + (int) length + " m")
+                    .setCancelable(false)
+                    .setPositiveButton("Main Lagi 🔄", (d, w) -> respawn())
+                    .setNegativeButton("Keluar 🚪", (d, w) -> leaveRoom())
+                    .show();
+        });
     }
 
     private void respawn() {

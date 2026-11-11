@@ -185,7 +185,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                                         jboolean isBoosting, jfloatArray outState) {
     if (!pAlive) return;
 
-    // 1. Update Pemain Lokal
     if (joyActive) {
         float target = std::atan2(joyDy, joyDx);
         float diff = wrapAngle(target - pAngle);
@@ -225,7 +224,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
     float currentRadius = calcRadius(pLen);
 
-    // Pemain makan makanan
     for (size_t i = 0; i < gFoods.size(); i++) {
         float dx = gFoods[i].x - pX;
         float dy = gFoods[i].y - pY;
@@ -236,7 +234,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // 2. Update AI Bot
     for (auto& b : gBots) {
         b.timer--;
         if (b.timer <= 0) {
@@ -271,7 +268,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
         float botRadius = calcRadius(b.len);
 
-        // Bot makan makanan
         for (auto& f : gFoods) {
             float dx = f.x - b.hx;
             float dy = f.y - b.hy;
@@ -283,7 +279,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // 3. Tabrakan: Bot menabrak Pemain (Player Kill Bot)
+    // Tabrakan: Bot menabrak Pemain (Player Kill Bot)
     if (pAlive) {
         for (auto& b : gBots) {
             float botRadius = calcRadius(b.len);
@@ -301,7 +297,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // 4. Tabrakan: Pemain menabrak Bot (Pemain Mati)
+    // Tabrakan: Pemain menabrak Bot (Pemain Mati)
     if (pAlive) {
         for (const auto& b : gBots) {
             float botRadius = calcRadius(b.len);
@@ -318,7 +314,7 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // 5. Tabrakan: Bot vs Bot (Bot Saling Membunuh)
+    // Tabrakan: Bot vs Bot (Bot Saling Membunuh)
     for (size_t i = 0; i < gBots.size(); i++) {
         float r_i = calcRadius(gBots[i].len);
         bool botDied = false;
@@ -342,7 +338,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // Array output: [x, y, angle, len, radius, alive, kills]
     jfloat temp[7];
     temp[0] = pX;
     temp[1] = pY;

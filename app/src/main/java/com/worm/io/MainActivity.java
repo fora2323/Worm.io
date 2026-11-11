@@ -41,6 +41,7 @@ public class MainActivity extends Activity {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         hideSystemUI();
 
+        SoundManager.init(this);
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
         LinearLayout root = new LinearLayout(this);
@@ -184,9 +185,21 @@ public class MainActivity extends Activity {
 
         try {
             rtdb = new Rtdb(Config.databaseUrl(this));
-        } catch (Exception e) {
-            tvStatus.setText("Info: Firebase belum siap (" + e.getMessage() + "). Mode Single Player tetap aktif.");
-        }
+        } catch (Exception ignored) {}
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        hideSystemUI();
+        SoundManager.init(this);
+        SoundManager.startLobbyMusic();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        SoundManager.stopLobbyMusic();
     }
 
     @Override
@@ -242,10 +255,6 @@ public class MainActivity extends Activity {
 
     private void showMultiplayerMenu() {
         if (playerName() == null) return;
-        if (rtdb == null) {
-            tvStatus.setText("Gagal baca assets/firebase.json untuk Multiplayer");
-            return;
-        }
         tvStatus.setText("");
         tvModeSubtitle.setText("MULTIPLAYER LOBBY • BUAT ATAU MASUK ROOM");
         layoutHome.setVisibility(View.GONE);
@@ -274,6 +283,7 @@ public class MainActivity extends Activity {
     private void startSinglePlayer() {
         String name = playerName();
         if (name == null) return;
+        SoundManager.stopLobbyMusic();
         Intent i = new Intent(this, GameActivity.class);
         i.putExtra(GameActivity.EXTRA_SINGLE, true);
         i.putExtra(GameActivity.EXTRA_NAME, name);
@@ -282,10 +292,11 @@ public class MainActivity extends Activity {
 
     private void createRoom() {
         String name = playerName();
-        if (name == null || rtdb == null) return;
+        if (name == null) return;
         busy(true, "Sedang menyiapkan room...");
         new Thread(() -> {
             try {
+                if (rtdb == null) rtdb = new Rtdb(Config.databaseUrl(this));
                 RoomManager.Joined j = RoomManager.create(rtdb, name);
                 ui.post(() -> showCreatedRoomDialog(j, name));
             } catch (Exception e) {
@@ -301,6 +312,7 @@ public class MainActivity extends Activity {
                 .setMessage("Kode Room Kamu: " + j.code + "\n\nBagikan kode 4 digit ini ke teman yang ingin Join Room.")
                 .setCancelable(false)
                 .setPositiveButton("Mulai Bermain", (d, w) -> {
+                    SoundManager.stopLobbyMusic();
                     new Thread(() -> {
                         try {
                             String path = RoomManager.ROOM_NODE + "/" + j.code;
@@ -315,7 +327,7 @@ public class MainActivity extends Activity {
     private void joinRoom() {
         String name = playerName();
         String code = etCode.getText().toString().trim();
-        if (name == null || rtdb == null) return;
+        if (name == null) return;
         if (code.length() != 4) {
             tvStatus.setText("Kode room wajib 4 digit angka!");
             return;
@@ -323,8 +335,12 @@ public class MainActivity extends Activity {
         busy(true, "Menghubungkan ke room " + code + "...");
         new Thread(() -> {
             try {
+                if (rtdb == null) rtdb = new Rtdb(Config.databaseUrl(this));
                 RoomManager.Joined j = RoomManager.join(rtdb, code, name);
-                ui.post(() -> openGame(j, name));
+                ui.post(() -> {
+                    SoundManager.stopLobbyMusic();
+                    openGame(j, name);
+                });
             } catch (Exception e) {
                 fail(e);
             }
