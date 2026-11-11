@@ -26,7 +26,6 @@ static float gHeadR = 10.0f;
 static float gSeg = 4.0f;
 static float gStartLen = 120.0f;
 
-// Pemain Lokal
 static float pX = 3000.0f, pY = 3000.0f;
 static float pAngle = 0.0f;
 static float pAngularVel = 0.0f;
@@ -34,12 +33,10 @@ static float pLen = 120.0f;
 static bool pAlive = true;
 static std::deque<Point> pTrail;
 
-// Bot & Makanan
 static std::vector<Pellet> gFoods;
 static std::vector<BotCacing> gBots;
 static std::mt19937 rng(1337);
 
-// Static reusable buffers (Menghilangkan lag memori / GC)
 static std::vector<jfloat> sTrailBuf;
 static std::vector<jfloat> sFoodBuf;
 static std::vector<jint> sColorBuf;
@@ -188,7 +185,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
     float currentRadius = calcRadius(pLen);
 
-    // Makan makanan
     for (size_t i = 0; i < gFoods.size(); i++) {
         float dx = gFoods[i].x - pX;
         float dy = gFoods[i].y - pY;
@@ -199,7 +195,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
         }
     }
 
-    // AI Bot Update
     for (auto& b : gBots) {
         b.timer--;
         if (b.timer <= 0) {
@@ -234,7 +229,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
 
         float botRadius = calcRadius(b.len);
 
-        // Bot makan makanan
         for (auto& f : gFoods) {
             float dx = f.x - b.hx;
             float dy = f.y - b.hy;
@@ -245,7 +239,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
             }
         }
 
-        // Cek jika pemain menabrak badan bot
         if (pAlive) {
             float killDist = currentRadius * 0.7f + botRadius * 0.7f;
             for (const auto& pt : b.trail) {
@@ -258,14 +251,12 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
             }
         }
 
-        // Cek jika bot menabrak badan pemain (Player membunuh Bot)
         if (pAlive) {
             float killDist = botRadius * 0.7f + currentRadius * 0.7f;
             for (const auto& pt : pTrail) {
                 float dx = pt.x - b.hx;
                 float dy = pt.y - b.hy;
                 if (dx * dx + dy * dy < killDist * killDist) {
-                    // Bot mati: Jatuhkan makanan (dibatasi maksimal 1200 agar tidak buffer overflow / crash)
                     for (size_t k = 0; k < b.trail.size(); k += 4) {
                         Pellet p;
                         p.x = b.trail[k].x;
@@ -280,7 +271,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
                         }
                     }
 
-                    // Respawn Bot
                     std::uniform_real_distribution<float> distSpawn(gWorld * 0.2f, gWorld * 0.8f);
                     std::uniform_real_distribution<float> distAngle(0.0f, 2.0f * M_PI);
                     b.hx = distSpawn(rng);
@@ -313,7 +303,6 @@ Java_com_worm_io_GameEngine_nativeUpdate(JNIEnv* env, jclass clazz,
     env->SetFloatArrayRegion(outState, 0, 6, temp);
 }
 
-// Mengunci koordinat kepala di titik 0 agar gerakan mulus tanpa tersendat
 JNIEXPORT jint JNICALL
 Java_com_worm_io_GameEngine_nativeGetTrail(JNIEnv* env, jclass clazz, jfloatArray outPts) {
     jsize maxPts = env->GetArrayLength(outPts);
@@ -334,7 +323,6 @@ Java_com_worm_io_GameEngine_nativeGetTrail(JNIEnv* env, jclass clazz, jfloatArra
     return nFloats / 2;
 }
 
-// Menjamin jumlah makanan yang disalin tidak melampaui batas array Java
 JNIEXPORT jint JNICALL
 Java_com_worm_io_GameEngine_nativeGetFoodData(JNIEnv* env, jclass clazz, jfloatArray outFoods, jintArray outColors) {
     jsize maxColors = env->GetArrayLength(outColors);
@@ -385,7 +373,6 @@ Java_com_worm_io_GameEngine_nativeGetBotsData(JNIEnv* env, jclass clazz,
         sBotInfoBuf[i * 6 + 4] = calcRadius(gBots[i].len);
         sBotInfoBuf[i * 6 + 5] = (float)gBots[i].color;
 
-        // Kepala bot di posisi pertama
         if (currentOffset + 2 <= maxTrails) {
             sBotTrailBuf.push_back(gBots[i].hx);
             sBotTrailBuf.push_back(gBots[i].hy);
